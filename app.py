@@ -36,24 +36,28 @@ def render_uploader() -> None:
     if not uploaded_files:
         return
 
+    cache = st.session_state.setdefault("converted", {})
+
     for file in uploaded_files:
-        progress_bar = st.progress(0, text=f"{file.name} 준비 중…")
+        if file.file_id not in cache:
+            progress_bar = st.progress(0, text=f"{file.name} 준비 중…")
 
-        def on_progress(percent: int, message: str, name: str = file.name) -> None:
-            progress_bar.progress(percent, text=f"{name} — {message}")
+            def on_progress(percent: int, message: str, name: str = file.name) -> None:
+                progress_bar.progress(percent, text=f"{name} — {message}")
 
-        zip_bytes = convert_upload_to_zip(
-            file.name, file.read(), on_progress=on_progress
-        )
-        progress_bar.empty()
+            zip_bytes = convert_upload_to_zip(
+                file.name, file.read(), on_progress=on_progress
+            )
+            progress_bar.empty()
+            cache[file.file_id] = zip_bytes
 
         base_name = Path(file.name).stem
         st.download_button(
             f"{base_name} 엑셀 다운로드",
-            zip_bytes,
+            cache[file.file_id],
             file_name=f"{base_name}.zip",
             mime="application/zip",
-            key=file.name,
+            key=file.file_id,
         )
 
 
