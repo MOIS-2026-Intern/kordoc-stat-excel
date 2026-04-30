@@ -6,6 +6,10 @@ __pycache__/
 
 # 출력 결과물
 statoutput/
+*.hwp
+*.md
+*.xlsx
+*.zip
 
 # 테스트용 입력 파일
 *.hwp
