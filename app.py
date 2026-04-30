@@ -13,6 +13,7 @@ LOGO_PATH = Path(__file__).parent / "src" / "logo2.png"
 
 def render_header() -> None:
     st.title("HWP → Excel 변환기")
+    st.caption("수정수정")
     st.caption("아직은 베타 버전입니다. 변환이 안 되는 파일이 있을 수 있어요.")
     st.divider()
 
