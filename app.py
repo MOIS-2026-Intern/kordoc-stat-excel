@@ -1,51 +1,50 @@
 """
-업로드한 hwp/pdf 등을 kordoc로 마크다운으로 변환한 뒤,
-그 안의 <table>들을 엑셀(.xlsx)로 추출해 zip으로 묶어 다운로드시키는 Streamlit 앱.
+통계연보 표 추출기 Streamlit UI.
 """
 
-import io
-import subprocess
-import tempfile
-import zipfile
 from pathlib import Path
 
 import streamlit as st
 
-from extract_tables import convert_md_to_excel
+from pipeline import convert_upload_to_zip
 
-# kordoc CLI를 실행해 입력 파일을 마크다운으로 변환
-def run_kordoc(input_path: Path, output_path: Path) -> None:
-    subprocess.run(
-        ["npx", "-y", "kordoc", str(input_path), "-o", str(output_path)],
-        check=True,
+LOGO_PATH = Path(__file__).parent / "src" / "logo2.png"
+
+
+def render_header() -> None:
+    st.title("HWP → Excel 변환기")
+    st.caption("아직은 베타 버전입니다. 변환이 안 되는 파일이 있을 수 있어요.")
+    st.divider()
+
+
+def render_footer() -> None:
+    st.divider()
+    st.markdown(
+        "<div style='text-align:center; color:#888; font-size:0.85rem; padding:0.5rem 0;'>"
+        "© 행정안전부 (MOIS) · 표 추출기"
+        "</div>",
+        unsafe_allow_html=True,
     )
 
-# 엑셀 파일 목록을 메모리상의 zip 바이트로 묶어 반환
-def build_zip_bytes(xlsx_paths: list[Path]) -> bytes:
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w") as zf:
-        for p in xlsx_paths:
-            zf.write(p, arcname=p.name)
-    return buf.getvalue()
 
+def render_uploader() -> None:
+    uploaded_files = st.file_uploader(
+        "파일 업로드 (hwp, pdf 등)",
+        accept_multiple_files=True,
+    )
+    if not uploaded_files:
+        return
 
-# 파일 업로드
-uploaded_files = st.file_uploader("파일 업로드", accept_multiple_files=True)
-
-if uploaded_files:
     for file in uploaded_files:
-        # 파일마다 임시 디렉토리에서 (원본 저장 → md 변환 → xlsx 추출) 파이프라인 돌림
-        with tempfile.TemporaryDirectory() as tmpdir:
-            tmp = Path(tmpdir)
-            input_path = tmp / file.name
-            output_md = tmp / "output.md"
-            xlsx_dir = tmp / "xlsx"
+        progress_bar = st.progress(0, text=f"{file.name} 준비 중…")
 
-            input_path.write_bytes(file.read())
-            run_kordoc(input_path, output_md)
-            xlsx_paths = convert_md_to_excel(output_md, xlsx_dir)
+        def on_progress(percent: int, message: str, name: str = file.name) -> None:
+            progress_bar.progress(percent, text=f"{name} — {message}")
 
-            zip_bytes = build_zip_bytes(xlsx_paths)
+        zip_bytes = convert_upload_to_zip(
+            file.name, file.read(), on_progress=on_progress
+        )
+        progress_bar.empty()
 
         base_name = Path(file.name).stem
         st.download_button(
@@ -55,3 +54,17 @@ if uploaded_files:
             mime="application/zip",
             key=file.name,
         )
+
+
+def main() -> None:
+    st.set_page_config(
+        page_title="한글 표 추출기",
+        page_icon=str(LOGO_PATH),
+        layout="centered",
+    )
+    render_header()
+    render_uploader()
+    render_footer()
+
+
+main()
