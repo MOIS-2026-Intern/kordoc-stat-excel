@@ -1,0 +1,11 @@
+venv/
+__pycache__/
+*.pyc
+
+.DS_Store
+
+# 출력 결과물
+statoutput/
+
+# 테스트용 입력 파일
+*.hwp
