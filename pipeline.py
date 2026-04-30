@@ -59,6 +59,7 @@ def convert_upload_to_zip(
 
         report(75, "표를 엑셀로 추출 중…")
         xlsx_paths = convert_md_to_excel_generic(output_md, xlsx_dir)
+        '''-> 통계 연보 단일 파싱의 경우 convert_md_to_excel 함수로 전환'''
 
         report(95, "zip 압축 중…")
         result = build_zip_bytes(xlsx_paths)
