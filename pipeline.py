@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from extract_tables import convert_md_to_excel
+from extract_tables_generic import convert_md_to_excel as convert_md_to_excel_generic
 
 # (percent: 0~100, message: str) 를 받는 진행률 콜백 타입
 ProgressCallback = Callable[[int, str], None]
@@ -57,7 +58,7 @@ def convert_upload_to_zip(
         run_kordoc(input_path, output_md)
 
         report(75, "표를 엑셀로 추출 중…")
-        xlsx_paths = convert_md_to_excel(output_md, xlsx_dir)
+        xlsx_paths = convert_md_to_excel_generic(output_md, xlsx_dir)
 
         report(95, "zip 압축 중…")
         result = build_zip_bytes(xlsx_paths)
