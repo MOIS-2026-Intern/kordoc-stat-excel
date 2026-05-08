@@ -22,6 +22,10 @@ HEADING_RE = re.compile(r"^(\d+(?:-\d+)+)\t(.+)$", re.MULTILINE)
 # HTML table 블록 탐색
 TABLE_RE = re.compile(r"<table\b.*?</table>", re.IGNORECASE | re.DOTALL)
 
+MAX_SHEETS_PER_WORKBOOK = 100
+SHEET_TITLE_MAX_LENGTH = 31
+SHEET_TITLE_INVALID_RE = re.compile(r"[\[\]\\/*?:]")
+
 # 0-based Excel 병합 범위
 MergeRange = tuple[int, int, int, int]
 ParsedGrid = tuple[list[list[str]], list[MergeRange], list[bool]]
@@ -203,7 +207,22 @@ def _autosize_columns(worksheet, grid: list[list[str]]) -> None:
         )
 
 
-# Excel 파일 저장
+# 워크시트에 표 쓰기
+def _write_table_to_worksheet(
+    workbook: Workbook,
+    sheet_name: str,
+    grid: list[list[str]],
+    merges: list[MergeRange],
+    is_header: list[bool],
+) -> None:
+    worksheet = workbook.create_sheet(title=sheet_name)
+
+    _apply_cell_values_and_styles(worksheet, grid, is_header)
+    _apply_merges(worksheet, merges)
+    _autosize_columns(worksheet, grid)
+
+
+# 단일 표 Excel 파일 저장
 def write_excel(
     grid: list[list[str]],
     merges: list[MergeRange],
@@ -211,12 +230,9 @@ def write_excel(
     output_path: Path,
 ) -> None:
     workbook = Workbook()
-    worksheet = workbook.active
-    worksheet.title = "Sheet1"
+    workbook.remove(workbook.active)
 
-    _apply_cell_values_and_styles(worksheet, grid, is_header)
-    _apply_merges(worksheet, merges)
-    _autosize_columns(worksheet, grid)
+    _write_table_to_worksheet(workbook, "Sheet1", grid, merges, is_header)
 
     workbook.save(output_path)
 
@@ -255,31 +271,79 @@ def _unique_filename(base: str, used_names: dict[str, int]) -> str:
     return f"{base}_{used_names[base]}"
 
 
+# Excel 시트명 제약에 맞춰 기존 표 이름을 보정
+def _sanitize_sheet_title(text: str) -> str:
+    title = SHEET_TITLE_INVALID_RE.sub("_", text).strip("'").strip()
+    return title or "Sheet"
+
+
+# 한 워크북 안에서 중복되지 않는 시트명 생성
+def _unique_sheet_title(base: str, used_titles: set[str]) -> str:
+    base = _sanitize_sheet_title(base)
+
+    for suffix_index in range(1, len(used_titles) + 2):
+        suffix = "" if suffix_index == 1 else f"_{suffix_index}"
+        title = f"{base[:SHEET_TITLE_MAX_LENGTH - len(suffix)]}{suffix}"
+        normalized_title = title.casefold()
+        if normalized_title not in used_titles:
+            used_titles.add(normalized_title)
+            return title
+
+    raise RuntimeError("시트명을 만들 수 없습니다.")
+
+
+# 100개 시트 단위의 출력 파일 경로 생성
+def _workbook_output_path(md_path: Path, output_dir: Path, index: int) -> Path:
+    base_name = sanitize_filename(md_path.stem) or "tables"
+    return output_dir / f"{base_name}_{index}.xlsx"
+
+
 # 통계연보 마크다운의 표를 Excel로 변환
 def convert_md_to_excel(md_path: Path, output_dir: Path) -> list[Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
     text = md_path.read_text(encoding="utf-8")
 
     used_names: dict[str, int] = {}
+    used_sheet_titles: set[str] = set()
     saved_paths: list[Path] = []
+    workbook_index = 1
+    sheets_in_workbook = 0
+    workbook = Workbook()
+    workbook.remove(workbook.active)
 
     for table in find_tables_with_headings(text):
         if table.heading is None:
             continue
 
         base_name = sanitize_filename(table.heading)
-        file_stem = _unique_filename(base_name, used_names)
-        output_path = output_dir / f"{file_stem}.xlsx"
+        table_name = _unique_filename(base_name, used_names)
 
         try:
             grid, merges, is_header = parse_table_to_grid(table.html)
             if not grid:
                 continue
 
-            write_excel(grid, merges, is_header, output_path)
-            saved_paths.append(output_path)
+            if sheets_in_workbook == MAX_SHEETS_PER_WORKBOOK:
+                output_path = _workbook_output_path(md_path, output_dir, workbook_index)
+                workbook.save(output_path)
+                saved_paths.append(output_path)
+
+                workbook_index += 1
+                sheets_in_workbook = 0
+                used_sheet_titles = set()
+                workbook = Workbook()
+                workbook.remove(workbook.active)
+
+            sheet_name = _unique_sheet_title(table_name, used_sheet_titles)
+            _write_table_to_worksheet(workbook, sheet_name, grid, merges, is_header)
+            sheets_in_workbook += 1
         except Exception as error:
-            print(f"  [error] line {table.line_no} ({file_stem}): {error}")
+            print(f"  [error] line {table.line_no} ({table_name}): {error}")
+
+    if sheets_in_workbook:
+        output_path = _workbook_output_path(md_path, output_dir, workbook_index)
+        workbook.save(output_path)
+        saved_paths.append(output_path)
 
     return saved_paths
 
