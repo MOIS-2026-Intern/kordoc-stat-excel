@@ -1,17 +1,12 @@
 #!/usr/bin/env python3
-"""
-범용 마크다운 → 엑셀 표 추출기
-extract_tables.py와 동일한 convert_md_to_excel 시그니처를 제공한다.
-pipeline.py의 import만 바꿔주면 통계연보 형식이 아닌 다른 문서에도 동작한다.
+# 범용 마크다운의 HTML 표를 Excel 파일로 저장
+# 일반 마크다운 헤딩을 표 제목으로 사용
 
-차이점:
-- 통계연보 전용 코드형 헤딩(`1-1-1-2\\t제목`) 대신 일반 마크다운 헤딩(`#`, `##`...)을 사용
-- 헤딩이 없는 표도 `table_001` 형태의 일련번호로 저장
-- 같은 출력 폴더에 여러 입력의 결과가 섞여도 구분되도록 입력 파일명을 prefix로 붙임
-"""
+from __future__ import annotations
 
 import re
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 from extract_tables import (
@@ -21,60 +16,94 @@ from extract_tables import (
     write_excel,
 )
 
-# `# 제목`, `## 제목` 등 ATX 스타일 마크다운 헤딩
+# ATX 스타일 마크다운 헤딩 탐색
 MD_HEADING_RE = re.compile(r"^#{1,6}\s+(.+?)\s*#*\s*$", re.MULTILINE)
 
 
-# 각 <table>을 가장 가까운 앞 헤딩(없으면 None)과 짝지어 반환
-def find_tables_with_headings(text: str):
-    headings = [(m.start(), m.group(1).strip()) for m in MD_HEADING_RE.finditer(text)]
-    out = []
-    for tm in TABLE_RE.finditer(text):
+@dataclass(frozen=True)
+class GenericTableMatch:
+    heading: str | None
+    html: str
+    line_no: int
+    index: int
+
+
+# 표와 가장 가까운 앞쪽 마크다운 헤딩 매칭
+def find_tables_with_headings(text: str) -> list[GenericTableMatch]:
+    headings = [
+        (match.start(), match.group(1).strip())
+        for match in MD_HEADING_RE.finditer(text)
+    ]
+    matches: list[GenericTableMatch] = []
+
+    for index, table_match in enumerate(TABLE_RE.finditer(text), start=1):
         heading = next(
-            (h_text for h_start, h_text in reversed(headings) if h_start < tm.start()),
+            (
+                heading_text
+                for heading_start, heading_text in reversed(headings)
+                if heading_start < table_match.start()
+            ),
             None,
         )
-        line_no = text.count("\n", 0, tm.start()) + 1
-        out.append((heading, tm.group(0), line_no))
-    return out
+        line_no = text.count("\n", 0, table_match.start()) + 1
+        matches.append(
+            GenericTableMatch(
+                heading=heading,
+                html=table_match.group(0),
+                line_no=line_no,
+                index=index,
+            )
+        )
+
+    return matches
 
 
-# md 안의 모든 <table>을 xlsx로 저장하고 경로 목록을 돌려줌
+# 출력 파일 기본 이름 생성
+def _build_base_name(md_path: Path, table: GenericTableMatch) -> str:
+    prefix = sanitize_filename(md_path.stem)
+    table_name = sanitize_filename(table.heading) if table.heading else f"table_{table.index:03d}"
+    return f"{prefix}_{table_name}" if prefix else table_name
+
+
+# 중복 파일명 suffix 처리
+def _unique_filename(base: str, used_names: dict[str, int]) -> str:
+    used_names[base] = used_names.get(base, 0) + 1
+    if used_names[base] == 1:
+        return base
+    return f"{base}_{used_names[base]}"
+
+
+# 범용 마크다운의 표를 Excel로 변환
 def convert_md_to_excel(md_path: Path, output_dir: Path) -> list[Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
     text = md_path.read_text(encoding="utf-8")
-    prefix = sanitize_filename(md_path.stem)
 
     used_names: dict[str, int] = {}
     saved_paths: list[Path] = []
 
-    for idx, (heading, table_html, line_no) in enumerate(
-        find_tables_with_headings(text), start=1
-    ):
-        base = sanitize_filename(heading) if heading else f"table_{idx:03d}"
-        name = f"{prefix}_{base}" if prefix else base
-
-        used_names[name] = used_names.get(name, 0) + 1
-        if used_names[name] > 1:
-            name = f"{name}_{used_names[name]}"
-        out_path = output_dir / f"{name}.xlsx"
+    for table in find_tables_with_headings(text):
+        file_stem = _unique_filename(_build_base_name(md_path, table), used_names)
+        output_path = output_dir / f"{file_stem}.xlsx"
 
         try:
-            grid, merges, is_header = parse_table_to_grid(table_html)
+            grid, merges, is_header = parse_table_to_grid(table.html)
             if not grid:
                 continue
-            write_excel(grid, merges, is_header, out_path)
-            saved_paths.append(out_path)
-        except Exception as e:
-            print(f"  [error] line {line_no} ({name}): {e}")
+
+            write_excel(grid, merges, is_header, output_path)
+            saved_paths.append(output_path)
+        except Exception as error:
+            print(f"  [error] line {table.line_no} ({file_stem}): {error}")
 
     return saved_paths
 
 
-def main():
+# CLI 실행 진입점
+def main() -> None:
     if len(sys.argv) < 3:
         print("Usage: python extract_tables_generic.py <input.md> <output_dir>")
         sys.exit(1)
+
     saved = convert_md_to_excel(Path(sys.argv[1]), Path(sys.argv[2]))
     print(f"저장: {len(saved)}개")
     print(f"출력 폴더: {sys.argv[2]}")

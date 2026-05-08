@@ -1,6 +1,7 @@
-"""
-통계연보 표 추출기 Streamlit UI.
-"""
+# Streamlit UI 진입점
+# 파일 업로드와 zip 다운로드 화면 구성
+
+from __future__ import annotations
 
 from pathlib import Path
 
@@ -8,16 +9,20 @@ import streamlit as st
 
 from pipeline import convert_upload_to_zip
 
+APP_TITLE = "HWP → Excel 변환기"
+APP_CAPTION = "아직은 베타 버전입니다. 변환이 안 되는 파일이 있을 수 있어요."
+DOWNLOAD_MIME = "application/zip"
 LOGO_PATH = Path(__file__).parent / "src" / "logo2.png"
 
 
+# 상단 제목 영역 렌더링
 def render_header() -> None:
-    st.title("HWP → Excel 변환기")
-    st.caption("수정수정")
-    st.caption("아직은 베타 버전입니다. 변환이 안 되는 파일이 있을 수 있어요.")
+    st.title(APP_TITLE)
+    st.caption(APP_CAPTION)
     st.divider()
 
 
+# 하단 안내 영역 렌더링
 def render_footer() -> None:
     st.divider()
     st.markdown(
@@ -28,6 +33,41 @@ def render_footer() -> None:
     )
 
 
+# 변환 결과 세션 캐시 조회
+def _get_conversion_cache() -> dict[str, bytes]:
+    return st.session_state.setdefault("converted", {})
+
+
+# 업로드 파일 변환
+def _convert_uploaded_file(file) -> bytes:
+    progress_bar = st.progress(0, text=f"{file.name} 준비 중…")
+
+    def update_progress(percent: int, message: str) -> None:
+        progress_bar.progress(percent, text=f"{file.name} — {message}")
+
+    try:
+        return convert_upload_to_zip(
+            filename=file.name,
+            data=file.read(),
+            on_progress=update_progress,
+        )
+    finally:
+        progress_bar.empty()
+
+
+# 다운로드 버튼 렌더링
+def render_download_button(file, zip_bytes: bytes) -> None:
+    base_name = Path(file.name).stem
+    st.download_button(
+        label=f"{base_name} 엑셀 다운로드",
+        data=zip_bytes,
+        file_name=f"{base_name}.zip",
+        mime=DOWNLOAD_MIME,
+        key=file.file_id,
+    )
+
+
+# 파일 업로드 영역 렌더링
 def render_uploader() -> None:
     uploaded_files = st.file_uploader(
         "파일 업로드 (hwp, pdf 등)",
@@ -36,31 +76,15 @@ def render_uploader() -> None:
     if not uploaded_files:
         return
 
-    cache = st.session_state.setdefault("converted", {})
-
+    cache = _get_conversion_cache()
     for file in uploaded_files:
         if file.file_id not in cache:
-            progress_bar = st.progress(0, text=f"{file.name} 준비 중…")
+            cache[file.file_id] = _convert_uploaded_file(file)
 
-            def on_progress(percent: int, message: str, name: str = file.name) -> None:
-                progress_bar.progress(percent, text=f"{name} — {message}")
-
-            zip_bytes = convert_upload_to_zip(
-                file.name, file.read(), on_progress=on_progress
-            )
-            progress_bar.empty()
-            cache[file.file_id] = zip_bytes
-
-        base_name = Path(file.name).stem
-        st.download_button(
-            f"{base_name} 엑셀 다운로드",
-            cache[file.file_id],
-            file_name=f"{base_name}.zip",
-            mime="application/zip",
-            key=file.file_id,
-        )
+        render_download_button(file, cache[file.file_id])
 
 
+# 앱 실행
 def main() -> None:
     st.set_page_config(
         page_title="한글 표 추출기",
