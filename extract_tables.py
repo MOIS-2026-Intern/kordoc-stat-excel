@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""
-마크다운 안의 <table>들을 추출해 엑셀(.xlsx)로 저장
-파일명은 표 바로 위에 있는 코드형 헤딩(예: '1-1-1-2\t정부조직 변천 ...')에서 가져옴
-"""
+# 통계연보 마크다운의 HTML 표를 Excel 파일로 저장
+# 공용 표 파싱/Excel 저장 함수는 범용 추출기에서도 재사용
+
+from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from pathlib import Path
 
-from bs4 import BeautifulSoup, NavigableString
+from bs4 import BeautifulSoup, NavigableString, Tag
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font
 from openpyxl.utils import get_column_letter
@@ -15,11 +16,32 @@ from openpyxl.utils import get_column_letter
 INPUT_FILE = Path("/Users/song/dev/mois/kordoc/통계연보파싱.md")
 OUTPUT_DIR = Path("/Users/song/dev/mois/kordoc/statoutput")
 
-# '1-1-1-2\t정부조직 변천 ...' 형태의 코드형 헤딩
+# 통계연보 코드형 헤딩 탐색
 HEADING_RE = re.compile(r"^(\d+(?:-\d+)+)\t(.+)$", re.MULTILINE)
+
+# HTML table 블록 탐색
 TABLE_RE = re.compile(r"<table\b.*?</table>", re.IGNORECASE | re.DOTALL)
 
-# 파일 시스템에서 쓸 수 없는 문자/공백을 정리하고 길이 제한
+# 0-based Excel 병합 범위
+MergeRange = tuple[int, int, int, int]
+ParsedGrid = tuple[list[list[str]], list[MergeRange], list[bool]]
+
+
+@dataclass(frozen=True)
+class TableMatch:
+    heading: str | None
+    html: str
+    line_no: int
+
+
+@dataclass(frozen=True)
+class ParsedCell:
+    row: int
+    col: int
+    text: str
+
+
+# 파일명 사용 불가 문자 정리
 def sanitize_filename(text: str) -> str:
     text = text.replace("\t", " ")
     text = re.sub(r'[\/\\:*?"<>|]', "_", text)
@@ -27,139 +49,213 @@ def sanitize_filename(text: str) -> str:
     return text[:180].rstrip()
 
 
-# 셀 내부 텍스트를 뽑되, <br>은 줄바꿈으로 변환
-def get_cell_text(cell) -> str:
-    parts = []
-    for elem in cell.descendants:
-        if isinstance(elem, NavigableString):
-            parts.append(str(elem))
-        elif elem.name == "br":
+# HTML 셀 텍스트 추출
+def get_cell_text(cell: Tag) -> str:
+    parts: list[str] = []
+    for element in cell.descendants:
+        if isinstance(element, NavigableString):
+            parts.append(str(element))
+        elif isinstance(element, Tag) and element.name == "br":
             parts.append("\n")
-    lines = [re.sub(r"[ \t]+", " ", ln).strip() for ln in "".join(parts).split("\n")]
+
+    lines = [
+        re.sub(r"[ \t]+", " ", line).strip()
+        for line in "".join(parts).split("\n")
+    ]
     return "\n".join(lines).strip()
 
 
-# rowspan/colspan 속성을 정수로 변환 (잘못된 값이면 1).
-def _intspan(cell, attr: str) -> int:
+# rowspan/colspan 안전 변환
+def _get_span(cell: Tag, attr: str) -> int:
     try:
         return max(1, int(cell.get(attr, 1)))
     except (TypeError, ValueError):
         return 1
 
 
-"""
-    rowspan/colspan을 반영한 2D 그리드로 변환
-    반환: (grid, merges, is_header)
-      - grid:      List[List[str]]
-      - merges:    [(r1, c1, r2, c2)]  (0-based, inclusive)
-      - is_header: 행별 헤더 여부 (해당 행이 <th>를 포함하면 True)
-    """
-def parse_table_to_grid(table_html: str):
+# rowspan 점유 열 건너뛰기
+def _next_available_column(row: int, start_col: int, occupied: set[tuple[int, int]]) -> int:
+    col = start_col
+    while (row, col) in occupied:
+        col += 1
+    return col
+
+
+# 병합 셀 점유 좌표 표시
+def _mark_spanned_cells(
+    occupied: set[tuple[int, int]],
+    start_row: int,
+    start_col: int,
+    rowspan: int,
+    colspan: int,
+) -> None:
+    for row in range(start_row, start_row + rowspan):
+        for col in range(start_col, start_col + colspan):
+            if (row, col) != (start_row, start_col):
+                occupied.add((row, col))
+
+
+# HTML table을 Excel용 그리드로 변환
+def parse_table_to_grid(table_html: str) -> ParsedGrid:
     soup = BeautifulSoup(table_html, "html.parser")
     table = soup.find("table")
-    if not table:
+    if table is None:
         return [], [], []
 
     rows = table.find_all("tr")
-    placed = []           # (row, col, text) — 실제 셀이 놓인 위치
-    occupied = set()      # 다른 셀의 span으로 점유된 좌표 (해당 칸엔 새 셀을 둘 수 없음)
-    merges = []
+    placed_cells: list[ParsedCell] = []
+    occupied: set[tuple[int, int]] = set()
+    merges: list[MergeRange] = []
     is_header = [False] * len(rows)
     max_rows = len(rows)
     max_cols = 0
 
-    for r, tr in enumerate(rows):
-        c = 0
+    for row_index, tr in enumerate(rows):
+        col_index = 0
         for cell in tr.find_all(["th", "td"]):
             if cell.name == "th":
-                is_header[r] = True
-            # 이미 윗 행에서 rowspan으로 점유된 칸은 건너뜀
-            while (r, c) in occupied:
-                c += 1
+                is_header[row_index] = True
 
-            rowspan = _intspan(cell, "rowspan")
-            colspan = _intspan(cell, "colspan")
-            placed.append((r, c, get_cell_text(cell)))
+            col_index = _next_available_column(row_index, col_index, occupied)
+            rowspan = _get_span(cell, "rowspan")
+            colspan = _get_span(cell, "colspan")
 
-            for rr in range(r, r + rowspan):
-                for cc in range(c, c + colspan):
-                    if (rr, cc) != (r, c):
-                        occupied.add((rr, cc))
+            placed_cells.append(
+                ParsedCell(
+                    row=row_index,
+                    col=col_index,
+                    text=get_cell_text(cell),
+                )
+            )
+            _mark_spanned_cells(occupied, row_index, col_index, rowspan, colspan)
 
             if rowspan > 1 or colspan > 1:
-                merges.append((r, c, r + rowspan - 1, c + colspan - 1))
+                merges.append(
+                    (
+                        row_index,
+                        col_index,
+                        row_index + rowspan - 1,
+                        col_index + colspan - 1,
+                    )
+                )
 
-            max_rows = max(max_rows, r + rowspan)
-            max_cols = max(max_cols, c + colspan)
-            c += colspan
+            max_rows = max(max_rows, row_index + rowspan)
+            max_cols = max(max_cols, col_index + colspan)
+            col_index += colspan
 
-    # rowspan이 마지막 행을 넘어가는 비정상 케이스를 위해 is_header 길이를 맞춤.
     is_header.extend([False] * (max_rows - len(is_header)))
 
     grid = [[""] * max_cols for _ in range(max_rows)]
-    for r, c, text in placed:
-        grid[r][c] = text
+    for cell in placed_cells:
+        grid[cell.row][cell.col] = cell.text
+
     return grid, merges, is_header
 
 
-# 그리드/병합 정보를 받아 xlsx 파일로 저장
-def write_excel(grid, merges, is_header, output_path: Path) -> None:
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Sheet1"
-
+# 셀 값과 기본 스타일 적용
+def _apply_cell_values_and_styles(
+    worksheet,
+    grid: list[list[str]],
+    is_header: list[bool],
+) -> None:
     bold = Font(bold=True)
     align = Alignment(wrap_text=True, vertical="center", horizontal="center")
 
-    # 셀 값/스타일 채우기 (openpyxl은 1-based)
-    for r, row in enumerate(grid, start=1):
-        for c, value in enumerate(row, start=1):
-            cell = ws.cell(row=r, column=c, value=value)
+    for row_index, row in enumerate(grid, start=1):
+        for col_index, value in enumerate(row, start=1):
+            cell = worksheet.cell(row=row_index, column=col_index, value=value)
             cell.alignment = align
-            if is_header[r - 1]:
+            if is_header[row_index - 1]:
                 cell.font = bold
 
-    # 병합 적용
-    for (sr, sc, er, ec) in merges:
-        if sr == er and sc == ec:
+
+# 병합 범위 적용
+def _apply_merges(worksheet, merges: list[MergeRange]) -> None:
+    for start_row, start_col, end_row, end_col in merges:
+        if start_row == end_row and start_col == end_col:
             continue
-        ws.merge_cells(
-            start_row=sr + 1, start_column=sc + 1,
-            end_row=er + 1, end_column=ec + 1,
+        worksheet.merge_cells(
+            start_row=start_row + 1,
+            start_column=start_col + 1,
+            end_row=end_row + 1,
+            end_column=end_col + 1,
         )
 
-    # 컬럼 너비: 가장 긴 줄 기준 + 여유, 단 [10, 50] 범위로 클램프
-    if grid:
-        for c in range(len(grid[0])):
-            longest = max(
-                (len(ln) for row in grid if c < len(row) for ln in row[c].split("\n")),
-                default=8,
-            )
-            ws.column_dimensions[get_column_letter(c + 1)].width = min(max(longest + 2, 10), 50)
 
-    wb.save(output_path)
+# 열 너비 자동 조정
+def _autosize_columns(worksheet, grid: list[list[str]]) -> None:
+    if not grid:
+        return
+
+    for col_index in range(len(grid[0])):
+        longest_line = max(
+            (
+                len(line)
+                for row in grid
+                if col_index < len(row)
+                for line in row[col_index].split("\n")
+            ),
+            default=8,
+        )
+        worksheet.column_dimensions[get_column_letter(col_index + 1)].width = min(
+            max(longest_line + 2, 10),
+            50,
+        )
 
 
-"""
-    문서에서 <table>...</table> 블록을 모두 찾고,
-    각 표의 시작 위치보다 앞에 있는 코드형 헤딩 중 가장 가까운 것을 짝지어 반환
-    반환: [(heading_or_None, table_html, start_line)]
-    """
-def find_tables_with_headings(text: str):
-    headings = [(m.start(), m.group(0)) for m in HEADING_RE.finditer(text)]
-    out = []
-    for tm in TABLE_RE.finditer(text):
-        # 표 시작점 앞의 헤딩 중 가장 가까운 것을 찾음
+# Excel 파일 저장
+def write_excel(
+    grid: list[list[str]],
+    merges: list[MergeRange],
+    is_header: list[bool],
+    output_path: Path,
+) -> None:
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = "Sheet1"
+
+    _apply_cell_values_and_styles(worksheet, grid, is_header)
+    _apply_merges(worksheet, merges)
+    _autosize_columns(worksheet, grid)
+
+    workbook.save(output_path)
+
+
+# 표와 가장 가까운 앞쪽 헤딩 매칭
+def find_tables_with_headings(text: str) -> list[TableMatch]:
+    headings = [(match.start(), match.group(0)) for match in HEADING_RE.finditer(text)]
+    matches: list[TableMatch] = []
+
+    for table_match in TABLE_RE.finditer(text):
         heading = next(
-            (h_text for h_start, h_text in reversed(headings) if h_start < tm.start()),
+            (
+                heading_text
+                for heading_start, heading_text in reversed(headings)
+                if heading_start < table_match.start()
+            ),
             None,
         )
-        line_no = text.count("\n", 0, tm.start()) + 1
-        out.append((heading, tm.group(0), line_no))
-    return out
+        line_no = text.count("\n", 0, table_match.start()) + 1
+        matches.append(
+            TableMatch(
+                heading=heading,
+                html=table_match.group(0),
+                line_no=line_no,
+            )
+        )
+
+    return matches
 
 
-# md 파일에서 표를 모두 추출해 output_dir에 xlsx로 저장하고 경로 목록을 돌려줌
+# 중복 파일명 suffix 처리
+def _unique_filename(base: str, used_names: dict[str, int]) -> str:
+    used_names[base] = used_names.get(base, 0) + 1
+    if used_names[base] == 1:
+        return base
+    return f"{base}_{used_names[base]}"
+
+
+# 통계연보 마크다운의 표를 Excel로 변환
 def convert_md_to_excel(md_path: Path, output_dir: Path) -> list[Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
     text = md_path.read_text(encoding="utf-8")
@@ -167,29 +263,29 @@ def convert_md_to_excel(md_path: Path, output_dir: Path) -> list[Path]:
     used_names: dict[str, int] = {}
     saved_paths: list[Path] = []
 
-    for heading, table_html, line_no in find_tables_with_headings(text):
-        if heading is None:
+    for table in find_tables_with_headings(text):
+        if table.heading is None:
             continue
 
-        base = sanitize_filename(heading)
-        # 같은 헤딩이 여러 번 나오면 _2, _3, ... 으로 충돌 회피
-        used_names[base] = used_names.get(base, 0) + 1
-        name = base if used_names[base] == 1 else f"{base}_{used_names[base]}"
-        out_path = output_dir / f"{name}.xlsx"
+        base_name = sanitize_filename(table.heading)
+        file_stem = _unique_filename(base_name, used_names)
+        output_path = output_dir / f"{file_stem}.xlsx"
 
         try:
-            grid, merges, is_header = parse_table_to_grid(table_html)
+            grid, merges, is_header = parse_table_to_grid(table.html)
             if not grid:
                 continue
-            write_excel(grid, merges, is_header, out_path)
-            saved_paths.append(out_path)
-        except Exception as e:
-            print(f"  [error] line {line_no} ({name}): {e}")
+
+            write_excel(grid, merges, is_header, output_path)
+            saved_paths.append(output_path)
+        except Exception as error:
+            print(f"  [error] line {table.line_no} ({file_stem}): {error}")
 
     return saved_paths
 
 
-def main():
+# CLI 실행 진입점
+def main() -> None:
     saved = convert_md_to_excel(INPUT_FILE, OUTPUT_DIR)
     print(f"저장: {len(saved)}개")
     print(f"출력 폴더: {OUTPUT_DIR}")
