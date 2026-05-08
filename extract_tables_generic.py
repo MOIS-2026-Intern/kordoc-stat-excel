@@ -9,10 +9,11 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from extract_tables import (
+from table_utils import (
     TABLE_RE,
     parse_table_to_grid,
     sanitize_filename,
+    unique_filename,
     write_excel,
 )
 
@@ -65,14 +66,6 @@ def _build_base_name(md_path: Path, table: GenericTableMatch) -> str:
     return f"{prefix}_{table_name}" if prefix else table_name
 
 
-# 중복 파일명 suffix 처리
-def _unique_filename(base: str, used_names: dict[str, int]) -> str:
-    used_names[base] = used_names.get(base, 0) + 1
-    if used_names[base] == 1:
-        return base
-    return f"{base}_{used_names[base]}"
-
-
 # 범용 마크다운의 표를 Excel로 변환
 def convert_md_to_excel(md_path: Path, output_dir: Path) -> list[Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -82,7 +75,7 @@ def convert_md_to_excel(md_path: Path, output_dir: Path) -> list[Path]:
     saved_paths: list[Path] = []
 
     for table in find_tables_with_headings(text):
-        file_stem = _unique_filename(_build_base_name(md_path, table), used_names)
+        file_stem = unique_filename(_build_base_name(md_path, table), used_names)
         output_path = output_dir / f"{file_stem}.xlsx"
 
         try:
