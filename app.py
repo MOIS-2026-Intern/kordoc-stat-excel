@@ -7,7 +7,7 @@ from pathlib import Path
 
 import streamlit as st
 
-from pipeline import convert_upload_to_zip
+from pipeline import DEFAULT_EXTRACTOR, EXTRACTORS, convert_upload_to_zip
 
 APP_TITLE = "HWP → Excel 변환기"
 APP_CAPTION = "아직은 베타 버전입니다. 변환이 안 되는 파일이 있을 수 있어요."
@@ -16,10 +16,17 @@ LOGO_PATH = Path(__file__).parent / "src" / "logo2.png"
 
 
 # 상단 제목 영역 렌더링
-def render_header() -> None:
+def render_header() -> str:
     st.title(APP_TITLE)
     st.caption(APP_CAPTION)
     st.divider()
+    extractor_names = list(EXTRACTORS)
+    return st.selectbox(
+        "추출기 선택",
+        options=extractor_names,
+        index=extractor_names.index(DEFAULT_EXTRACTOR),
+        key="extractor_name",
+    )
 
 
 # 하단 안내 영역 렌더링
@@ -38,8 +45,13 @@ def _get_conversion_cache() -> dict[str, bytes]:
     return st.session_state.setdefault("converted", {})
 
 
+# 변환 결과 캐시 키 생성
+def _build_cache_key(file, extractor_name: str) -> str:
+    return f"{extractor_name}:{file.file_id}"
+
+
 # 업로드 파일 변환
-def _convert_uploaded_file(file) -> bytes:
+def _convert_uploaded_file(file, extractor_name: str) -> bytes:
     progress_bar = st.progress(0, text=f"{file.name} 준비 중…")
 
     def update_progress(percent: int, message: str) -> None:
@@ -49,6 +61,7 @@ def _convert_uploaded_file(file) -> bytes:
         return convert_upload_to_zip(
             filename=file.name,
             data=file.read(),
+            extractor_name=extractor_name,
             on_progress=update_progress,
         )
     finally:
@@ -68,7 +81,7 @@ def render_download_button(file, zip_bytes: bytes) -> None:
 
 
 # 파일 업로드 영역 렌더링
-def render_uploader() -> None:
+def render_uploader(extractor_name: str) -> None:
     uploaded_files = st.file_uploader(
         "파일 업로드 (hwp, pdf 등)",
         accept_multiple_files=True,
@@ -78,10 +91,11 @@ def render_uploader() -> None:
 
     cache = _get_conversion_cache()
     for file in uploaded_files:
-        if file.file_id not in cache:
-            cache[file.file_id] = _convert_uploaded_file(file)
+        cache_key = _build_cache_key(file, extractor_name)
+        if cache_key not in cache:
+            cache[cache_key] = _convert_uploaded_file(file, extractor_name)
 
-        render_download_button(file, cache[file.file_id])
+        render_download_button(file, cache[cache_key])
 
 
 # 앱 실행
@@ -91,8 +105,8 @@ def main() -> None:
         page_icon=str(LOGO_PATH),
         layout="centered",
     )
-    render_header()
-    render_uploader()
+    extractor_name = render_header()
+    render_uploader(extractor_name)
     render_footer()
 
 

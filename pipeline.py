@@ -10,10 +10,21 @@ import zipfile
 from pathlib import Path
 from typing import Callable
 
-from extract_tables_generic import convert_md_to_excel
+from extract_tables import convert_md_to_excel as convert_statistics_yearbook_md_to_excel
+from extract_tables_generic import convert_md_to_excel as convert_generic_md_to_excel
 
 # 진행률 콜백 타입
 ProgressCallback = Callable[[int, str], None]
+TableExtractor = Callable[[Path, Path], list[Path]]
+
+STATISTICS_YEARBOOK_EXTRACTOR = "행정안전통계연보 추출기"
+GENERIC_EXTRACTOR = "범용 추출기"
+DEFAULT_EXTRACTOR = GENERIC_EXTRACTOR
+
+EXTRACTORS: dict[str, TableExtractor] = {
+    STATISTICS_YEARBOOK_EXTRACTOR: convert_statistics_yearbook_md_to_excel,
+    GENERIC_EXTRACTOR: convert_generic_md_to_excel,
+}
 
 
 # kordoc CLI 실행
@@ -47,8 +58,13 @@ def _report(
 def convert_upload_to_zip(
     filename: str,
     data: bytes,
+    extractor_name: str = DEFAULT_EXTRACTOR,
     on_progress: ProgressCallback | None = None,
 ) -> bytes:
+    extractor = EXTRACTORS.get(extractor_name)
+    if extractor is None:
+        raise ValueError(f"지원하지 않는 추출기입니다: {extractor_name}")
+
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp_path = Path(tmpdir)
         input_path = tmp_path / filename
@@ -61,8 +77,8 @@ def convert_upload_to_zip(
         _report(on_progress, 15, "마크다운 변환 중… (시간이 좀 걸려요)")
         run_kordoc(input_path, markdown_path)
 
-        _report(on_progress, 75, "표를 엑셀로 추출 중…")
-        xlsx_paths = convert_md_to_excel(markdown_path, xlsx_dir)
+        _report(on_progress, 75, f"{extractor_name}로 표를 엑셀로 추출 중…")
+        xlsx_paths = extractor(markdown_path, xlsx_dir)
 
         _report(on_progress, 95, "zip 압축 중…")
         result = build_zip_bytes(xlsx_paths)
