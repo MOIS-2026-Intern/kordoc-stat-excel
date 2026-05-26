@@ -13,6 +13,7 @@ APP_TITLE = "HWP → Excel 변환기"
 APP_CAPTION = "아직은 베타 버전입니다. 변환이 안 되는 파일이 있을 수 있어요."
 DOWNLOAD_MIME = "application/zip"
 LOGO_PATH = Path(__file__).parent / "src" / "logo2.png"
+CONVERSION_CACHE_VERSION = "numeric-columns-v2"
 
 
 # 상단 제목 영역 렌더링
@@ -47,7 +48,7 @@ def _get_conversion_cache() -> dict[str, bytes]:
 
 # 변환 결과 캐시 키 생성
 def _build_cache_key(file, extractor_name: str) -> str:
-    return f"{extractor_name}:{file.file_id}"
+    return f"{CONVERSION_CACHE_VERSION}:{extractor_name}:{file.file_id}"
 
 
 # 업로드 파일 변환
