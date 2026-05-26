@@ -10,7 +10,7 @@ import zipfile
 from pathlib import Path
 from typing import Callable
 
-from extract_tables import convert_md_to_excel
+from extract_tables_generic import convert_md_to_excel
 
 # 진행률 콜백 타입
 ProgressCallback = Callable[[int, str], None]
