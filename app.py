@@ -94,7 +94,11 @@ def render_uploader(extractor_name: str) -> None:
     for file in uploaded_files:
         cache_key = _build_cache_key(file, extractor_name)
         if cache_key not in cache:
-            cache[cache_key] = _convert_uploaded_file(file, extractor_name)
+            try:
+                cache[cache_key] = _convert_uploaded_file(file, extractor_name)
+            except ValueError as error:
+                st.error(str(error))
+                continue
 
         render_download_button(file, cache[cache_key])
 
