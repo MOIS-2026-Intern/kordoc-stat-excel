@@ -6,6 +6,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TypeAlias
 
 from bs4 import BeautifulSoup, NavigableString, Tag
 from openpyxl import Workbook
@@ -21,6 +22,14 @@ SHEET_TITLE_INVALID_RE = re.compile(r"[\[\]\\/*?:]")
 # 0-based Excel 병합 범위
 MergeRange = tuple[int, int, int, int]
 ParsedGrid = tuple[list[list[str]], list[MergeRange], list[bool]]
+NumberValue: TypeAlias = int | float
+CellValue: TypeAlias = str | NumberValue
+NumericColumnFormats: TypeAlias = dict[int, str]
+
+NUMERIC_RE = re.compile(
+    r"^[+-]?(?:(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d+)?|\.\d+)$"
+)
+MISSING_NUMERIC_TEXTS = {"-", "–", "—"}
 
 
 @dataclass(frozen=True)
@@ -170,11 +179,64 @@ def parse_table_to_grid(table_html: str) -> ParsedGrid:
     return grid, merges, is_header
 
 
+# 숫자로 변환 가능한 셀 텍스트 파싱
+def _parse_numeric_value(value: str) -> NumberValue | None:
+    text = value.strip()
+    if not text or not NUMERIC_RE.fullmatch(text):
+        return None
+
+    normalized = text.replace(",", "")
+    try:
+        return int(normalized)
+    except ValueError:
+        return float(normalized)
+
+
+# 열마다 처음 나오는 숫자 셀부터 아래쪽 값을 숫자 값으로 변환
+def convert_numeric_columns(
+    grid: list[list[str]],
+    is_header: list[bool],
+) -> tuple[list[list[CellValue]], NumericColumnFormats]:
+    if not grid:
+        return [], {}
+
+    converted: list[list[CellValue]] = [row[:] for row in grid]
+    numeric_column_formats: NumericColumnFormats = {}
+    max_cols = max((len(row) for row in grid), default=0)
+
+    for col_index in range(max_cols):
+        numeric_started = False
+        has_float = False
+
+        for row_index, row in enumerate(grid):
+            if col_index >= len(row):
+                continue
+
+            value = row[col_index]
+            if not value.strip() or value.strip() in MISSING_NUMERIC_TEXTS:
+                continue
+
+            number = _parse_numeric_value(value)
+            if number is None:
+                continue
+
+            numeric_started = True
+            converted[row_index][col_index] = number
+            if isinstance(number, float):
+                has_float = True
+
+        if numeric_started:
+            numeric_column_formats[col_index] = "#,##0.00" if has_float else "#,##0"
+
+    return converted, numeric_column_formats
+
+
 # 셀 값과 기본 스타일 적용
 def _apply_cell_values_and_styles(
     worksheet,
-    grid: list[list[str]],
+    grid: list[list[CellValue]],
     is_header: list[bool],
+    numeric_column_formats: NumericColumnFormats,
 ) -> None:
     bold = Font(bold=True)
     align = Alignment(wrap_text=True, vertical="center", horizontal="center")
@@ -185,6 +247,10 @@ def _apply_cell_values_and_styles(
             cell.alignment = align
             if is_header[row_index - 1]:
                 cell.font = bold
+            elif isinstance(value, (int, float)):
+                number_format = numeric_column_formats.get(col_index - 1)
+                if number_format is not None:
+                    cell.number_format = number_format
 
 
 # 병합 범위 적용
@@ -201,7 +267,7 @@ def _apply_merges(worksheet, merges: list[MergeRange]) -> None:
 
 
 # 열 너비 자동 조정
-def _autosize_columns(worksheet, grid: list[list[str]]) -> None:
+def _autosize_columns(worksheet, grid: list[list[CellValue]]) -> None:
     if not grid:
         return
 
@@ -211,7 +277,7 @@ def _autosize_columns(worksheet, grid: list[list[str]]) -> None:
                 len(line)
                 for row in grid
                 if col_index < len(row)
-                for line in row[col_index].split("\n")
+                for line in str(row[col_index]).split("\n")
             ),
             default=8,
         )
@@ -230,10 +296,16 @@ def write_table_to_worksheet(
     is_header: list[bool],
 ) -> None:
     worksheet = workbook.create_sheet(title=sheet_name)
+    converted_grid, numeric_column_formats = convert_numeric_columns(grid, is_header)
 
-    _apply_cell_values_and_styles(worksheet, grid, is_header)
+    _apply_cell_values_and_styles(
+        worksheet,
+        converted_grid,
+        is_header,
+        numeric_column_formats,
+    )
     _apply_merges(worksheet, merges)
-    _autosize_columns(worksheet, grid)
+    _autosize_columns(worksheet, converted_grid)
 
 
 # 단일 표 Excel 파일 저장
