@@ -226,9 +226,7 @@ def convert_numeric_columns(
                 has_float = True
 
         if numeric_started:
-            numeric_column_formats[col_index] = (
-                "#,##0.##########" if has_float else "#,##0"
-            )
+            numeric_column_formats[col_index] = "#,##0.00" if has_float else "#,##0"
 
     return converted, numeric_column_formats
 

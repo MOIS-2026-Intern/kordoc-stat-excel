@@ -13,7 +13,7 @@ APP_TITLE = "HWP → Excel 변환기"
 APP_CAPTION = "아직은 베타 버전입니다. 변환이 안 되는 파일이 있을 수 있어요."
 DOWNLOAD_MIME = "application/zip"
 LOGO_PATH = Path(__file__).parent / "src" / "logo2.png"
-CONVERSION_CACHE_VERSION = "numeric-columns-v2"
+CONVERSION_CACHE_VERSION = "numeric-columns-v4"
 
 
 # 상단 제목 영역 렌더링
