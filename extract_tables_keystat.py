@@ -9,13 +9,21 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from openpyxl import Workbook
+
 from table_extractor import (
+    export_table_safely,
     find_nearest_heading,
     find_table_blocks,
     iter_lines_with_offsets,
-    write_tables_to_excel_files,
+    parse_table_block,
 )
-from table_utils import sanitize_filename
+from table_utils import (
+    sanitize_filename,
+    unique_filename,
+    unique_sheet_title,
+    write_table_to_worksheet,
+)
 
 # 주요통계집 본문 제목 번호 탐색
 TITLE_CODE_RE = re.compile(r"^\s*((?:\d+-\d+)|(?:참고-\d+))\.?\s*$")
@@ -41,6 +49,14 @@ class KeyStatTableMatch:
     start: int
     line_no: int
     index: int
+
+
+@dataclass
+class WorkbookGroup:
+    output_path: Path
+    workbook: Workbook
+    used_sheet_titles: set[str]
+    sheet_count: int = 0
 
 
 # 제목 번호 바로 위의 실제 제목 줄 탐색
@@ -107,14 +123,68 @@ def _build_base_name(table: KeyStatTableMatch) -> str:
     return sanitize_filename(table.heading.file_title) or f"table_{table.index:03d}"
 
 
+# 주요통계집 번호 앞 그룹 이름 생성: 1-1, 1-2 -> output_1.xlsx
+def _build_group_base_name(table: KeyStatTableMatch) -> str:
+    if table.heading is None:
+        return _build_base_name(table)
+
+    group_name = table.heading.code.split("-", maxsplit=1)[0]
+    return sanitize_filename(f"output_{group_name}") or _build_base_name(table)
+
+
+def _create_workbook() -> Workbook:
+    workbook = Workbook()
+    workbook.remove(workbook.active)
+    return workbook
+
+
 # 주요통계집 마크다운의 표를 Excel로 변환
 def convert_md_to_excel(md_path: Path, output_dir: Path) -> list[Path]:
+    output_dir.mkdir(parents=True, exist_ok=True)
     text = md_path.read_text(encoding="utf-8")
-    return write_tables_to_excel_files(
-        find_tables_with_headings(text),
-        output_dir,
-        _build_base_name,
-    )
+    used_file_names: dict[str, int] = {}
+    workbook_groups: dict[str, WorkbookGroup] = {}
+
+    for table in find_tables_with_headings(text):
+        table_name = _build_base_name(table)
+        group_base_name = _build_group_base_name(table)
+
+        def _append_table() -> bool:
+            grid, merges, is_header = parse_table_block(table)
+            if not grid:
+                return False
+
+            group = workbook_groups.get(group_base_name)
+            if group is None:
+                file_stem = unique_filename(group_base_name, used_file_names)
+                group = WorkbookGroup(
+                    output_path=output_dir / f"{file_stem}.xlsx",
+                    workbook=_create_workbook(),
+                    used_sheet_titles=set(),
+                )
+                workbook_groups[group_base_name] = group
+
+            sheet_name = unique_sheet_title(table_name, group.used_sheet_titles)
+            write_table_to_worksheet(
+                group.workbook,
+                sheet_name,
+                grid,
+                merges,
+                is_header,
+            )
+            group.sheet_count += 1
+            return True
+
+        export_table_safely(table, table_name, _append_table)
+
+    saved_paths: list[Path] = []
+    for group in workbook_groups.values():
+        if group.sheet_count == 0:
+            continue
+        group.workbook.save(group.output_path)
+        saved_paths.append(group.output_path)
+
+    return saved_paths
 
 
 # CLI 실행 진입점
