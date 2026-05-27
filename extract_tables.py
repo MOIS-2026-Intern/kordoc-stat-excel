@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# 통계연보 마크다운의 HTML 표를 Excel 파일로 저장
-# 공용 표 파싱/Excel 저장 함수는 table_utils에서 재사용
+# 통계연보 마크다운의 HTML/Markdown 표를 Excel 파일로 저장
+# 공용 표 탐색/파싱 함수는 table_extractor과 table_utils에서 재사용
 
 from __future__ import annotations
 
@@ -10,9 +10,13 @@ from pathlib import Path
 
 from openpyxl import Workbook
 
+from table_extractor import (
+    export_table_safely,
+    find_nearest_heading,
+    find_table_blocks,
+    parse_table_block,
+)
 from table_utils import (
-    TABLE_RE,
-    parse_table_to_grid,
     sanitize_filename,
     unique_filename,
     unique_sheet_title,
@@ -31,30 +35,36 @@ MAX_SHEETS_PER_WORKBOOK = 100
 @dataclass(frozen=True)
 class TableMatch:
     heading: str | None
-    html: str
+    source: str
+    table_type: str
+    start: int
     line_no: int
+    index: int
+
+    @property
+    def html(self) -> str:
+        return self.source
+
+
+# 통계연보 코드형 헤딩 목록 생성
+def find_statistics_yearbook_headings(text: str) -> list[tuple[int, str]]:
+    return [(match.start(), match.group(0)) for match in HEADING_RE.finditer(text)]
 
 
 # 표와 가장 가까운 앞쪽 헤딩 매칭
 def find_tables_with_headings(text: str) -> list[TableMatch]:
-    headings = [(match.start(), match.group(0)) for match in HEADING_RE.finditer(text)]
+    headings = find_statistics_yearbook_headings(text)
     matches: list[TableMatch] = []
 
-    for table_match in TABLE_RE.finditer(text):
-        heading = next(
-            (
-                heading_text
-                for heading_start, heading_text in reversed(headings)
-                if heading_start < table_match.start()
-            ),
-            None,
-        )
-        line_no = text.count("\n", 0, table_match.start()) + 1
+    for table in find_table_blocks(text):
         matches.append(
             TableMatch(
-                heading=heading,
-                html=table_match.group(0),
-                line_no=line_no,
+                heading=find_nearest_heading(headings, table.start),
+                source=table.source,
+                table_type=table.table_type,
+                start=table.start,
+                line_no=table.line_no,
+                index=table.index,
             )
         )
 
@@ -87,10 +97,15 @@ def convert_md_to_excel(md_path: Path, output_dir: Path) -> list[Path]:
         base_name = sanitize_filename(table.heading)
         table_name = unique_filename(base_name, used_names)
 
-        try:
-            grid, merges, is_header = parse_table_to_grid(table.html)
+        def _append_table() -> bool:
+            nonlocal workbook
+            nonlocal workbook_index
+            nonlocal sheets_in_workbook
+            nonlocal used_sheet_titles
+
+            grid, merges, is_header = parse_table_block(table)
             if not grid:
-                continue
+                return False
 
             if sheets_in_workbook == MAX_SHEETS_PER_WORKBOOK:
                 output_path = _workbook_output_path(md_path, output_dir, workbook_index)
@@ -106,8 +121,9 @@ def convert_md_to_excel(md_path: Path, output_dir: Path) -> list[Path]:
             sheet_name = unique_sheet_title(table_name, used_sheet_titles)
             write_table_to_worksheet(workbook, sheet_name, grid, merges, is_header)
             sheets_in_workbook += 1
-        except Exception as error:
-            print(f"  [error] line {table.line_no} ({table_name}): {error}")
+            return True
+
+        export_table_safely(table, table_name, _append_table)
 
     if sheets_in_workbook:
         output_path = _workbook_output_path(md_path, output_dir, workbook_index)
