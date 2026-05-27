@@ -10,7 +10,7 @@ import zipfile
 from pathlib import Path
 from typing import Callable
 
-from extract_tables import convert_md_to_excel as convert_statistics_yearbook_md_to_excel
+from extract_tables_moisstat import convert_md_to_excel as convert_statistics_yearbook_md_to_excel
 from extract_tables_keystat import convert_md_to_excel as convert_key_year_statistics_md_to_excel
 from extract_tables_generic import convert_md_to_excel as convert_generic_md_to_excel
 
