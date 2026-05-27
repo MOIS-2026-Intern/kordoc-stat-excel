@@ -9,8 +9,8 @@ import streamlit as st
 
 from pipeline import DEFAULT_EXTRACTOR, EXTRACTORS, convert_upload_to_zip
 
-APP_TITLE = "HWP → Excel 변환기"
-APP_CAPTION = "아직은 베타 버전입니다. 변환이 안 되는 파일이 있을 수 있어요."
+APP_TITLE = "HWP(X) → Excel 표 추출기"
+APP_CAPTION = "베타 버전입니다. 변환이 안 되는 파일이 있을 수 있습니다."
 DOWNLOAD_MIME = "application/zip"
 LOGO_PATH = Path(__file__).parent / "src" / "logo2.png"
 CONVERSION_CACHE_VERSION = "numeric-columns-v4"
@@ -84,7 +84,7 @@ def render_download_button(file, zip_bytes: bytes) -> None:
 # 파일 업로드 영역 렌더링
 def render_uploader(extractor_name: str) -> None:
     uploaded_files = st.file_uploader(
-        "파일 업로드 (hwp, pdf 등)",
+        "파일 업로드 (hwp, hwpx, pdf 등)",
         accept_multiple_files=True,
     )
     if not uploaded_files:
