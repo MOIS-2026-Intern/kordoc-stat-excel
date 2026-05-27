@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import re
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -23,9 +24,6 @@ from table_utils import (
     write_table_to_worksheet,
 )
 
-INPUT_FILE = Path("/Users/song/dev/mois/kordoc/통계연보파싱.md")
-OUTPUT_DIR = Path("/Users/song/dev/mois/kordoc/statoutput")
-
 # 통계연보 코드형 헤딩 탐색
 HEADING_RE = re.compile(r"^(\d+(?:-\d+)+)\t(.+)$", re.MULTILINE)
 
@@ -40,10 +38,6 @@ class TableMatch:
     start: int
     line_no: int
     index: int
-
-    @property
-    def html(self) -> str:
-        return self.source
 
 
 # 통계연보 코드형 헤딩 목록 생성
@@ -82,7 +76,7 @@ def convert_md_to_excel(md_path: Path, output_dir: Path) -> list[Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
     text = md_path.read_text(encoding="utf-8")
 
-    used_names: dict[str, int] = {}
+    used_table_names: dict[str, int] = {}
     used_sheet_titles: set[str] = set()
     saved_paths: list[Path] = []
     workbook_index = 1
@@ -95,7 +89,7 @@ def convert_md_to_excel(md_path: Path, output_dir: Path) -> list[Path]:
             continue
 
         base_name = sanitize_filename(table.heading)
-        table_name = unique_filename(base_name, used_names)
+        table_name = unique_filename(base_name, used_table_names)
 
         def _append_table() -> bool:
             nonlocal workbook
@@ -135,9 +129,14 @@ def convert_md_to_excel(md_path: Path, output_dir: Path) -> list[Path]:
 
 # CLI 실행 진입점
 def main() -> None:
-    saved = convert_md_to_excel(INPUT_FILE, OUTPUT_DIR)
+    if len(sys.argv) < 3:
+        print("Usage: python extract_tables.py <input.md> <output_dir>")
+        sys.exit(1)
+
+    output_dir = Path(sys.argv[2])
+    saved = convert_md_to_excel(Path(sys.argv[1]), output_dir)
     print(f"저장: {len(saved)}개")
-    print(f"출력 폴더: {OUTPUT_DIR}")
+    print(f"출력 폴더: {output_dir}")
 
 
 if __name__ == "__main__":
