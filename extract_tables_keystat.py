@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # 주요통계집 마크다운의 HTML/Markdown 표를 Excel 파일로 저장
-# "1-1" 같은 번호 줄과 그 직전 제목 줄을 표 제목으로 사용
+# "1-1", "참고-1" 같은 번호 줄과 그 직전 제목 줄을 표 제목으로 사용
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ from table_utils import (
 )
 
 # 주요통계집 본문 제목 번호 탐색
-TITLE_CODE_RE = re.compile(r"^\s*(\d+-\d+)\.?\s*$")
+TITLE_CODE_RE = re.compile(r"^\s*((?:\d+-\d+)|(?:참고-\d+))\.?\s*$")
 MARKDOWN_TABLE_ROW_RE = re.compile(r"^\s*\|.*\|\s*$")
 MARKDOWN_SEPARATOR_CELL_RE = re.compile(r"^:?-{3,}:?$")
 HTML_BR_RE = re.compile(r"<br\s*/?>", re.IGNORECASE)
@@ -74,7 +74,7 @@ def _previous_title_line(lines: list[tuple[int, int, str]], code_line_index: int
     return ""
 
 
-# "1-1" 번호 줄을 기준으로 주요통계집 섹션 제목 목록 생성
+# "1-1", "참고-1" 번호 줄을 기준으로 주요통계집 섹션 제목 목록 생성
 def find_key_stat_headings(text: str) -> list[KeyStatHeading]:
     lines = _iter_lines_with_offsets(text)
     headings: list[KeyStatHeading] = []
