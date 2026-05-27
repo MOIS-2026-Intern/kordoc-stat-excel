@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Callable
 
 from extract_tables import convert_md_to_excel as convert_statistics_yearbook_md_to_excel
+from extract_tables_keystat import convert_md_to_excel as convert_key_year_statistics_md_to_excel
 from extract_tables_generic import convert_md_to_excel as convert_generic_md_to_excel
 
 # 진행률 콜백 타입
@@ -18,11 +19,13 @@ ProgressCallback = Callable[[int, str], None]
 TableExtractor = Callable[[Path, Path], list[Path]]
 
 STATISTICS_YEARBOOK_EXTRACTOR = "행정안전통계연보 추출기"
+KEY_YEAR_STATISTICS_EXTRACTOR = "주요통계집 추출기"
 GENERIC_EXTRACTOR = "범용 추출기"
 DEFAULT_EXTRACTOR = GENERIC_EXTRACTOR
 
 EXTRACTORS: dict[str, TableExtractor] = {
     STATISTICS_YEARBOOK_EXTRACTOR: convert_statistics_yearbook_md_to_excel,
+    KEY_YEAR_STATISTICS_EXTRACTOR: convert_key_year_statistics_md_to_excel,
     GENERIC_EXTRACTOR: convert_generic_md_to_excel,
 }
 
