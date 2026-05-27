@@ -29,6 +29,13 @@ class GenericTableMatch:
     index: int
 
 
+class NoTablesFoundError(ValueError):
+    pass
+
+
+NO_TABLES_FOUND_MESSAGE = "표가 발견되지 않았습니다. 표가 포함된 파일인지 확인해 주세요."
+
+
 # 표와 가장 가까운 앞쪽 마크다운 헤딩 매칭
 def find_tables_with_headings(text: str) -> list[GenericTableMatch]:
     headings = [
@@ -70,11 +77,15 @@ def _build_base_name(md_path: Path, table: GenericTableMatch) -> str:
 def convert_md_to_excel(md_path: Path, output_dir: Path) -> list[Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
     text = md_path.read_text(encoding="utf-8")
+    tables = find_tables_with_headings(text)
+
+    if not tables:
+        raise NoTablesFoundError(NO_TABLES_FOUND_MESSAGE)
 
     used_names: dict[str, int] = {}
     saved_paths: list[Path] = []
 
-    for table in find_tables_with_headings(text):
+    for table in tables:
         file_stem = unique_filename(_build_base_name(md_path, table), used_names)
         output_path = output_dir / f"{file_stem}.xlsx"
 
@@ -87,6 +98,9 @@ def convert_md_to_excel(md_path: Path, output_dir: Path) -> list[Path]:
             saved_paths.append(output_path)
         except Exception as error:
             print(f"  [error] line {table.line_no} ({file_stem}): {error}")
+
+    if not saved_paths:
+        raise NoTablesFoundError(NO_TABLES_FOUND_MESSAGE)
 
     return saved_paths
 
